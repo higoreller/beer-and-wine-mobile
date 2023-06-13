@@ -1,92 +1,100 @@
-import React, { useEffect, useRef, useState } from "react";
-import { StyleSheet, Text, View, SafeAreaView, Image } from "react-native";
-import { Button } from "react-native-paper";
-import { TextInput } from "react-native-paper";
-import { Camera } from "expo-camera";
-import * as MediaLibrary from "expo-media-library";
-import { shareAsync } from "expo-sharing";
+import React, { useState, useEffect } from "react";
+import {
+  getFirestore,
+  collection,
+  getDocs,
+  doc,
+  updateDoc,
+  deleteDoc,
+} from "firebase/firestore";
+import {
+  StyleSheet,
+  View,
+  Image,
+  TextInput,
+  TouchableOpacity,
+  Modal,
+  Button,
+} from "react-native";
+import { Layout, TopNav, themeColor, useTheme } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { Layout, TopNav, themeColor, useTheme } from "react-native-rapi-ui";
 
 export default function ({ navigation }) {
-  const [hasCameraPermission, setHasCameraPermission] = useState(null);
-  const [hasMediaLibraryPermission, setHasMediaLibraryPermission] =
-    useState(null);
-  const [beverage, setBeverage] = useState({
-    name: "",
-    manufacturer: "",
-    date: "",
-    price: "",
-    location: "",
-    description: "",
-    image: null,
-  });
-  let cameraRef = useRef();
+  const [beverages, setBeverages] = useState([]);
+  const [editedData, setEditedData] = useState({});
+  const [modalVisible, setModalVisible] = useState(false);
+  const [selectedImage, setSelectedImage] = useState(null);
+  const db = getFirestore();
 
   useEffect(() => {
-    (async () => {
-      const cameraPermission = await Camera.requestCameraPermissionsAsync();
-      const mediaLibraryPermission =
-        await MediaLibrary.requestPermissionsAsync();
-      const imagePickerPermission =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-      setHasCameraPermission(cameraPermission.status === "granted");
-      setHasMediaLibraryPermission(mediaLibraryPermission.status === "granted");
-
-      if (imagePickerPermission.status !== "granted") {
-        alert("Sorry, we need camera roll permissions to make this work!");
-      }
-    })();
+    const fetchBeverages = async () => {
+      const querySnapshot = await getDocs(collection(db, "beverages"));
+      let beveragesList = [];
+      querySnapshot.forEach((doc) => {
+        beveragesList.push({ id: doc.id, ...doc.data() });
+      });
+      setBeverages(beveragesList);
+    };
+    fetchBeverages();
   }, []);
 
-  const handleChange = (name, value) => {
-    setBeverage((prevState) => ({ ...prevState, [name]: value }));
+  const openImagePicker = async (id) => {
+    let permissionResult =
+      await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (permissionResult.granted === false) {
+      alert("Permission to access camera roll is required.");
+      return;
+    }
+
+    let pickerResult = await ImagePicker.launchImageLibraryAsync();
+    console.log(pickerResult);
+
+    if (pickerResult.cancelled === true) {
+      return;
+    }
+
+    setEditedData((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], image: pickerResult.uri },
+    }));
+    setSelectedImage(pickerResult.uri);
   };
 
-  let takePic = async () => {
-    let options = {
-      quality: 1,
-      base64: true,
-      exif: false,
-    };
+  const handleUpdate = async (id) => {
+    // Simulando um update otimista
+    const newBeverages = beverages.map((bev) =>
+      bev.id === id ? { ...bev, ...editedData[id] } : bev
+    );
+    setBeverages(newBeverages);
 
+    const beverageRef = doc(db, "beverages", id);
     try {
-      let newPhoto = await cameraRef.current.takePictureAsync(options);
-      handleChange("image", "data:image/jpg;base64," + newPhoto.base64);
+      await updateDoc(beverageRef, editedData[id]);
     } catch (error) {
+      // Revertendo a mudança se falhar
+      const originalBeverages = beverages.map((bev) =>
+        bev.id === id ? { ...bev } : bev
+      );
+      setBeverages(originalBeverages);
       console.log(error);
     }
+    setModalVisible(false);
+    setSelectedImage(null);
   };
 
-  let pickImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 1,
-      base64: true,
-    });
+  const handleDelete = async (id) => {
+    const newBeverages = beverages.filter((bev) => bev.id !== id);
+    setBeverages(newBeverages);
 
-    if (!result.cancelled) {
-      handleChange("image", "data:image/jpg;base64," + result.base64);
-    }
-  };
-
-  let sharePic = () => {
-    if (beverage.image) {
-      shareAsync(beverage.image).then(() => {
-        handleChange("image", null);
-      });
-    }
-  };
-
-  let savePhoto = () => {
-    if (beverage.image) {
-      MediaLibrary.saveToLibraryAsync(beverage.image).then(() => {
-        handleChange("image", null);
-      });
+    const beverageRef = doc(db, "beverages", id);
+    try {
+      await deleteDoc(beverageRef);
+    } catch (error) {
+      const originalBeverages = [...beverages];
+      setBeverages(originalBeverages);
+      console.log(error);
     }
   };
 
@@ -94,7 +102,7 @@ export default function ({ navigation }) {
   return (
     <Layout>
       <TopNav
-        middleContent="Cadastre sua bebida"
+        middleContent="Bebidas"
         leftContent={
           <Ionicons
             name="chevron-back"
@@ -118,110 +126,82 @@ export default function ({ navigation }) {
           }
         }}
       />
-      <SafeAreaView style={styles.container}>
-        {beverage.image ? (
-          <>
-            <Image style={styles.preview} source={{ uri: beverage.image }} />
-            <View style={styles.buttonContainer}>
-              <Button
-                mode="contained"
-                color="#f5a623"
-                style={styles.button}
-                onPress={sharePic}
-              >
-                Share
-              </Button>
-              {hasMediaLibraryPermission ? (
+      <View style={styles.container}>
+        {beverages.map((beverage) => (
+          <View key={beverage.id} style={styles.card}>
+            <TouchableOpacity
+              onPress={() => {
+                setModalVisible(true);
+                openImagePicker(beverage.id);
+              }}
+            >
+              <Image
+                style={styles.image}
+                source={{
+                  uri: editedData[beverage.id]?.image || beverage.image,
+                }}
+              />
+            </TouchableOpacity>
+            <Modal
+              animationType="slide"
+              transparent={true}
+              visible={modalVisible}
+            >
+              <View style={styles.modalView}>
+                {selectedImage && (
+                  <Image
+                    source={{ uri: selectedImage }}
+                    style={{ width: 200, height: 200 }}
+                  />
+                )}
                 <Button
-                  mode="contained"
-                  color="#f5a623"
+                  title="Close"
                   style={styles.button}
-                  onPress={savePhoto}
-                >
-                  Save
-                </Button>
-              ) : null}
-              <Button
-                mode="contained"
-                color="#f5a623"
-                style={styles.button}
-                onPress={() => handleChange("image", null)}
-              >
-                Discard
-              </Button>
+                  onPress={() => setModalVisible(false)}
+                />
+              </View>
+            </Modal>
+            <View style={styles.details}>
+              <TextInput
+                style={styles.input}
+                value={editedData[beverage.id]?.title || beverage.title}
+                onChangeText={(text) =>
+                  setEditedData((prev) => ({
+                    ...prev,
+                    [beverage.id]: { ...prev[beverage.id], title: text },
+                  }))
+                }
+              />
+              <TextInput
+                style={styles.input}
+                value={
+                  editedData[beverage.id]?.description || beverage.description
+                }
+                onChangeText={(text) =>
+                  setEditedData((prev) => ({
+                    ...prev,
+                    [beverage.id]: { ...prev[beverage.id], description: text },
+                  }))
+                }
+              />
             </View>
-          </>
-        ) : (
-          <View style={styles.buttonContainer}>
-            <Button
-              mode="contained"
-              color="#f5a623"
-              style={styles.button}
-              onPress={takePic}
-            >
-              Tirar foto
-            </Button>
-            <Button
-              mode="contained"
-              color="#f5a623"
-              style={styles.button}
-              onPress={pickImage}
-            >
-              Imagem do dispositivo
-            </Button>
+            <View style={styles.actions}>
+              <TouchableOpacity
+                style={styles.button}
+                onPress={() => handleUpdate(beverage.id)}
+              >
+                <Ionicons name="pencil-outline" size={24} color="white" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.button}
+                onPress={() => handleDelete(beverage.id)}
+              >
+                <Ionicons name="trash-outline" size={24} color="white" />
+              </TouchableOpacity>
+            </View>
           </View>
-        )}
-        <TextInput
-          label="Nome"
-          value={beverage.name}
-          style={styles.input}
-          onChangeText={(text) => handleChange("name", text)}
-        />
-
-        <TextInput
-          label="Fabricante"
-          value={beverage.manufacturer}
-          style={styles.input}
-          onChangeText={(text) => handleChange("manufacturer", text)}
-        />
-        <TextInput
-          label="Data"
-          value={beverage.date}
-          style={styles.input}
-          onChangeText={(text) => handleChange("date", text)}
-        />
-        <TextInput
-          label="Preço"
-          value={beverage.price}
-          style={styles.input}
-          onChangeText={(text) => handleChange("price", text)}
-        />
-        <TextInput
-          label="Local"
-          value={beverage.location}
-          style={styles.input}
-          onChangeText={(text) => handleChange("location", text)}
-        />
-        <TextInput
-          label="Descrição"
-          value={beverage.description}
-          style={styles.input}
-          onChangeText={(text) => handleChange("description", text)}
-        />
-        <View style={styles.buttonContainer}>
-          <Button
-            mode="contained"
-            color="#f5a623"
-            icon="content-save"
-            style={styles.button}
-            onPress={() => {
-              /* Save the beverage here */
-            }}
-          >
-            Salvar bebida
-          </Button>
-        </View>
-      </SafeAreaView>
+        ))}
+      </View>
     </Layout>
   );
 }
@@ -232,22 +212,61 @@ const styles = StyleSheet.create({
     backgroundColor: "#F5F5F5",
     padding: 20,
   },
-  preview: {
-    width: "100%",
-    height: 200,
-    marginBottom: 20,
-    resizeMode: "contain",
-  },
-  buttonContainer: {
+  card: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: 20,
+    padding: 20,
+    borderRadius: 10,
+    backgroundColor: "white",
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
-  button: {
+  image: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+  },
+  details: {
     flex: 1,
-    marginHorizontal: 5,
+    marginLeft: 20,
   },
   input: {
     marginBottom: 10,
+  },
+  actions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: 80,
+  },
+  button: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "darkblue",
+  },
+  modalView: {
+    margin: 20,
+    backgroundColor: "white",
+    borderRadius: 20,
+    padding: 35,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
   },
 });

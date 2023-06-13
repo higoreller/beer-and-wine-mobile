@@ -48,6 +48,15 @@ export default function ({ navigation }) {
               Home
             </Text>
             <Button
+              text="Cadastrar bebidas"
+              onPress={() => {
+                navigation.navigate("Cadastrar bebida");
+              }}
+              style={{
+                marginTop: 10,
+              }}
+            />
+            <Button
               text="Minhas bebidas"
               onPress={() => {
                 navigation.navigate("Minhas bebidas");
